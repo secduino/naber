@@ -148,6 +148,33 @@ app.post('/api/users/status', authenticateToken, (req, res) => {
   res.json({ success: true });
 });
 
+// Kullanıcı Ara (Sadece Tam Eşleşme - WhatsApp mantığı)
+app.get('/api/users/search', authenticateToken, (req, res) => {
+  const query = req.query.q?.trim() || '';
+  const currentUserId = req.userId;
+
+  if (!query) {
+    return res.json({ success: true, users: [] });
+  }
+
+  // Tam eşleşme ara (telefon veya email)
+  const result = Array.from(users.values()).find(u =>
+    u.id !== currentUserId && (
+      u.phoneNumber === query ||
+      u.phoneNumber === `+90${query}` || // +90 prefix ekle
+      u.phoneNumber === `+${query}` ||
+      (u.email && u.email.toLowerCase() === query.toLowerCase())
+    )
+  );
+
+  if (result) {
+    res.json({ success: true, users: [result] });
+  } else {
+    res.json({ success: true, users: [] });
+  }
+});
+
+
 // JWT Middleware
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
