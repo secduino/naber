@@ -1,3 +1,4 @@
+require('dotenv').config(); // Load environment variables
 const express = require('express');
 const http = require('http');
 const socketIO = require('socket.io');
@@ -34,8 +35,8 @@ const transporter = nodemailer.createTransport({
   port: 465,
   secure: true, // Port 465 için true olmalı
   auth: {
-    user: 'naber.dogrulama@gmail.com',
-    pass: 'hwlj bzle tgin lceh'
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
   }
 });
 
