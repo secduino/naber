@@ -4,6 +4,7 @@ const socketIO = require('socket.io');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const server = http.createServer(app);
@@ -26,6 +27,15 @@ const otpStore = new Map();
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'naber-secret-key-change-in-production';
 
+// Nodemailer Transporter
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: 'naber.dogrulama@gmail.com',
+    pass: 'hwlj bzle tgin lceh'
+  }
+});
+
 // OTP Gönder (Telefon)
 app.post('/api/auth/send-otp', (req, res) => {
   const { phoneNumber, otp } = req.body;
@@ -42,7 +52,7 @@ app.post('/api/auth/send-otp', (req, res) => {
 });
 
 // OTP Gönder (Email)
-app.post('/api/auth/send-email-otp', (req, res) => {
+app.post('/api/auth/send-email-otp', async (req, res) => {
   const { email, otp } = req.body;
 
   otpStore.set(email, {
@@ -50,9 +60,30 @@ app.post('/api/auth/send-email-otp', (req, res) => {
     expires: Date.now() + 5 * 60 * 1000
   });
 
-  console.log(`OTP sent to ${email}: ${otp}`);
+  const mailOptions = {
+    from: '"NAber??? App" <naber.dogrulama@gmail.com>',
+    to: email,
+    subject: 'NAber??? Doğrulama Kodu',
+    html: `
+      <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+        <h2 style="color: #075E54;">NAber??? Doğrulama</h2>
+        <p>Giriş yapmak için doğrulama kodunuz:</p>
+        <h1 style="font-size: 32px; letter-spacing: 5px; color: #128C7E;">${otp}</h1>
+        <p>Bu kod 5 dakika boyunca geçerlidir.</p>
+        <hr style="border: 1px solid #eee; margin: 20px 0;">
+        <p style="font-size: 12px; color: #888;">Bu kodu siz talep etmediyseniz lütfen dikkate almayınız.</p>
+      </div>
+    `
+  };
 
-  res.json({ success: true, message: 'OTP sent' });
+  try {
+    await transporter.sendMail(mailOptions);
+    console.log(`Email OTP sent to ${email}: ${otp}`);
+    res.json({ success: true, message: 'OTP email gönderildi' });
+  } catch (error) {
+    console.error('Email gönderim hatası:', error);
+    res.status(500).json({ success: false, message: 'Email gönderilemedi' });
+  }
 });
 
 // OTP Doğrula
@@ -231,7 +262,7 @@ io.on('connection', (socket) => {
       console.log('User not in map, re-adding:', data.userId);
       user = {
         id: data.userId,
-        name: 'Kullanıcı',
+        name: data.name || 'Kullanıcı',
         phoneNumber: data.phoneNumber || '',
         email: data.email || '',
         isOnline: true,
@@ -242,9 +273,10 @@ io.on('connection', (socket) => {
     } else {
       user.isOnline = true;
       user.socketId = socket.id;
-      // Bilgileri güncelle (eğer eksikse)
+      // Bilgileri güncelle (eğer eksikse veya değiştiyse)
       if (data.phoneNumber) user.phoneNumber = data.phoneNumber;
       if (data.email) user.email = data.email;
+      if (data.name) user.name = data.name;
 
       users.set(data.userId, user);
     }
