@@ -1,0 +1,336 @@
+const express = require('express');
+const http = require('http');
+const socketIO = require('socket.io');
+const cors = require('cors');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+
+const app = express();
+const server = http.createServer(app);
+const io = socketIO(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Basit in-memory storage (Production'da MongoDB kullanın)
+const users = new Map();
+const messages = new Map();
+const otpStore = new Map();
+
+// JWT Secret
+const JWT_SECRET = process.env.JWT_SECRET || 'naber-secret-key-change-in-production';
+
+// OTP Gönder (Telefon)
+app.post('/api/auth/send-otp', (req, res) => {
+  const { phoneNumber, otp } = req.body;
+
+  // OTP'yi sakla (5 dakika geçerli)
+  otpStore.set(phoneNumber, {
+    otp,
+    expires: Date.now() + 5 * 60 * 1000
+  });
+
+  console.log(`OTP sent to ${phoneNumber}: ${otp}`);
+
+  res.json({ success: true, message: 'OTP sent' });
+});
+
+// OTP Gönder (Email)
+app.post('/api/auth/send-email-otp', (req, res) => {
+  const { email, otp } = req.body;
+
+  otpStore.set(email, {
+    otp,
+    expires: Date.now() + 5 * 60 * 1000
+  });
+
+  console.log(`OTP sent to ${email}: ${otp}`);
+
+  res.json({ success: true, message: 'OTP sent' });
+});
+
+// OTP Doğrula
+app.post('/api/auth/verify-otp', (req, res) => {
+  const { identifier, otp, isPhone } = req.body;
+
+  const storedOTP = otpStore.get(identifier);
+
+  if (!storedOTP) {
+    return res.status(400).json({ success: false, message: 'OTP not found' });
+  }
+
+  if (Date.now() > storedOTP.expires) {
+    otpStore.delete(identifier);
+    return res.status(400).json({ success: false, message: 'OTP expired' });
+  }
+
+  if (storedOTP.otp !== otp) {
+    return res.status(400).json({ success: false, message: 'Invalid OTP' });
+  }
+
+  // OTP doğru - kullanıcı oluştur veya getir
+  let user = Array.from(users.values()).find(u =>
+    isPhone ? u.phoneNumber === identifier : u.email === identifier
+  );
+
+  const isNewUser = !user;
+
+  if (!user) {
+    const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    user = {
+      id: userId,
+      phoneNumber: isPhone ? identifier : '',
+      email: !isPhone ? identifier : '',
+      name: '',
+      createdAt: new Date()
+    };
+    users.set(userId, user);
+  }
+
+  // JWT token oluştur
+  const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '30d' });
+
+  otpStore.delete(identifier);
+
+  res.json({
+    success: true,
+    token,
+    userId: user.id,
+    isNewUser,
+    user: isNewUser ? null : user
+  });
+});
+
+// Profil Güncelle
+app.post('/api/users/profile', authenticateToken, (req, res) => {
+  const userId = req.userId;
+  const { name, profilePicture, status } = req.body;
+
+  const user = users.get(userId);
+  if (!user) {
+    return res.status(404).json({ success: false, message: 'User not found' });
+  }
+
+  user.name = name || user.name;
+  user.profilePicture = profilePicture || user.profilePicture;
+  user.status = status || user.status;
+
+  users.set(userId, user);
+
+  res.json({ success: true, user });
+});
+
+// Online Durum Güncelle
+app.post('/api/users/status', authenticateToken, (req, res) => {
+  const userId = req.userId;
+  const { isOnline } = req.body;
+
+  const user = users.get(userId);
+  if (user) {
+    user.isOnline = isOnline;
+    user.lastSeen = new Date();
+    users.set(userId, user);
+
+    // Socket ile broadcast et
+    io.emit('user:status', {
+      userId,
+      isOnline,
+      lastSeen: user.lastSeen
+    });
+  }
+
+  res.json({ success: true });
+});
+
+// JWT Middleware
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ success: false, message: 'No token provided' });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(403).json({ success: false, message: 'Invalid token' });
+    }
+    req.userId = decoded.userId;
+    next();
+  });
+}
+
+// Socket.IO
+io.on('connection', (socket) => {
+  console.log('New client connected:', socket.id);
+
+  const userId = socket.handshake.query.userId;
+
+  // Kullanıcıyı online yap
+  socket.on('user:online', (data) => {
+    const user = users.get(data.userId);
+    if (user) {
+      user.isOnline = true;
+      user.socketId = socket.id;
+      users.set(data.userId, user);
+
+      io.emit('user:status', {
+        userId: data.userId,
+        isOnline: true
+      });
+    }
+  });
+
+  // Mesaj gönder
+  socket.on('message:send', (message) => {
+    console.log('Message received:', message);
+
+    // Mesajı sakla
+    if (!messages.has(message.chatId)) {
+      messages.set(message.chatId, []);
+    }
+    messages.get(message.chatId).push(message);
+
+    // Alıcıya gönder
+    const receiver = users.get(message.receiverId);
+    if (receiver && receiver.socketId) {
+      io.to(receiver.socketId).emit('message:new', message);
+    }
+
+    // Gönderene onay
+    socket.emit('message:status', {
+      messageId: message.id,
+      status: 'delivered'
+    });
+  });
+
+  // Yazıyor göstergesi
+  socket.on('user:typing', (data) => {
+    const receiver = users.get(data.receiverId);
+    if (receiver && receiver.socketId) {
+      io.to(receiver.socketId).emit('user:typing', {
+        userId: userId,
+        isTyping: data.isTyping
+      });
+    }
+  });
+
+  // Chat okundu
+  socket.on('chat:read', (data) => {
+    // TODO: Mesaj durumlarını güncelle
+  });
+
+  // WebRTC Call Events
+
+  // Arama başlat
+  socket.on('call:start', (data) => {
+    const receiver = users.get(data.receiverId);
+    if (receiver && receiver.socketId) {
+      io.to(receiver.socketId).emit('call:incoming', {
+        callerId: userId,
+        type: data.type
+      });
+    }
+  });
+
+  // Aramayı kabul et
+  socket.on('call:accept', (data) => {
+    const caller = users.get(data.callerId);
+    if (caller && caller.socketId) {
+      io.to(caller.socketId).emit('call:accepted', {
+        receiverId: userId
+      });
+    }
+  });
+
+  // Aramayı reddet
+  socket.on('call:reject', (data) => {
+    const caller = users.get(data.callerId);
+    if (caller && caller.socketId) {
+      io.to(caller.socketId).emit('call:rejected', {
+        receiverId: userId
+      });
+    }
+  });
+
+  // Aramayı sonlandır
+  socket.on('call:end', (data) => {
+    const otherUser = users.get(data.userId);
+    if (otherUser && otherUser.socketId) {
+      io.to(otherUser.socketId).emit('call:ended', {
+        userId: userId
+      });
+    }
+  });
+
+  // WebRTC Offer
+  socket.on('webrtc:offer', (data) => {
+    const receiver = users.get(data.userId);
+    if (receiver && receiver.socketId) {
+      io.to(receiver.socketId).emit('webrtc:offer', {
+        userId: userId,
+        offer: data.offer
+      });
+    }
+  });
+
+  // WebRTC Answer
+  socket.on('webrtc:answer', (data) => {
+    const caller = users.get(data.userId);
+    if (caller && caller.socketId) {
+      io.to(caller.socketId).emit('webrtc:answer', {
+        userId: userId,
+        answer: data.answer
+      });
+    }
+  });
+
+  // ICE Candidate
+  socket.on('webrtc:ice-candidate', (data) => {
+    const otherUser = users.get(data.userId);
+    if (otherUser && otherUser.socketId) {
+      io.to(otherUser.socketId).emit('webrtc:ice-candidate', {
+        userId: userId,
+        candidate: data.candidate
+      });
+    }
+  });
+
+  // Bağlantı kesildiğinde
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+
+    // Kullanıcıyı offline yap
+    if (userId) {
+      const user = users.get(userId);
+      if (user) {
+        user.isOnline = false;
+        user.lastSeen = new Date();
+        users.set(userId, user);
+
+        io.emit('user:status', {
+          userId,
+          isOnline: false,
+          lastSeen: user.lastSeen
+        });
+      }
+    }
+  });
+});
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', users: users.size, messages: messages.size });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`🚀 NAber??? Server running on port ${PORT}`);
+  console.log(`📱 Socket.IO ready for connections`);
+});
