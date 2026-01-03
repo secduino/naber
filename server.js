@@ -31,8 +31,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'naber-secret-key-change-in-product
 // Nodemailer Transporter
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  port: 587,
-  secure: false, // true for 465, false for other ports
+  port: 465,
+  secure: true, // Port 465 için true olmalı
   auth: {
     user: 'naber.dogrulama@gmail.com',
     pass: 'hwlj bzle tgin lceh'
