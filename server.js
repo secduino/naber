@@ -217,17 +217,33 @@ io.on('connection', (socket) => {
 
   // Kullanıcıyı online yap
   socket.on('user:online', (data) => {
-    const user = users.get(data.userId);
-    if (user) {
+    let user = users.get(data.userId);
+
+    // Eğer kullanıcı map'te yoksa (server restart olmuş olabilir), yeniden ekle
+    if (!user) {
+      console.log('User not in map, re-adding:', data.userId);
+      user = {
+        id: data.userId,
+        name: 'Kullanıcı',
+        phoneNumber: '',
+        email: '',
+        isOnline: true,
+        socketId: socket.id,
+        createdAt: new Date()
+      };
+      users.set(data.userId, user);
+    } else {
       user.isOnline = true;
       user.socketId = socket.id;
       users.set(data.userId, user);
-
-      io.emit('user:status', {
-        userId: data.userId,
-        isOnline: true
-      });
     }
+
+    console.log(`User ${data.userId} is now online with socket ${socket.id}`);
+
+    io.emit('user:status', {
+      userId: data.userId,
+      isOnline: true
+    });
   });
 
   // Mesaj gönder
@@ -273,12 +289,16 @@ io.on('connection', (socket) => {
 
   // Arama başlat
   socket.on('call:start', (data) => {
+    console.log(`Call start: ${userId} -> ${data.receiverId}`);
     const receiver = users.get(data.receiverId);
     if (receiver && receiver.socketId) {
+      console.log(`Forwarding call to socket ${receiver.socketId}`);
       io.to(receiver.socketId).emit('call:incoming', {
         callerId: userId,
         type: data.type
       });
+    } else {
+      console.log(`Receiver ${data.receiverId} not found or offline`);
     }
   });
 
@@ -314,6 +334,7 @@ io.on('connection', (socket) => {
 
   // WebRTC Offer
   socket.on('webrtc:offer', (data) => {
+    console.log(`WebRTC Offer from ${userId} to ${data.userId}`);
     const receiver = users.get(data.userId);
     if (receiver && receiver.socketId) {
       io.to(receiver.socketId).emit('webrtc:offer', {
