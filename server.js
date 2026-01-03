@@ -28,8 +28,11 @@ const otpStore = new Map();
 const JWT_SECRET = process.env.JWT_SECRET || 'naber-secret-key-change-in-production';
 
 // Nodemailer Transporter
+// Nodemailer Transporter
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false, // true for 465, false for other ports
   auth: {
     user: 'naber.dogrulama@gmail.com',
     pass: 'hwlj bzle tgin lceh'
