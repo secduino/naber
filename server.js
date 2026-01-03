@@ -162,15 +162,20 @@ app.get('/api/users/search', authenticateToken, (req, res) => {
     return res.json({ success: true, users: [] });
   }
 
+  // Telefon numarasını temizle (boşluk, parantez vs.)
+  const cleanQuery = query.replace(/\D/g, '');
+
   // Tam eşleşme ara (telefon veya email)
-  const result = Array.from(users.values()).find(u =>
-    u.id !== currentUserId && (
-      u.phoneNumber === query ||
-      u.phoneNumber === `+90${query}` || // +90 prefix ekle
-      u.phoneNumber === `+${query}` ||
+  const result = Array.from(users.values()).find(u => {
+    const cleanUserPhone = u.phoneNumber.replace(/\D/g, '');
+
+    return u.id !== currentUserId && (
+      cleanUserPhone === cleanQuery ||
+      cleanUserPhone === `90${cleanQuery}` ||
+      `90${cleanUserPhone}` === cleanQuery ||
       (u.email && u.email.toLowerCase() === query.toLowerCase())
-    )
-  );
+    );
+  });
 
   if (result) {
     res.json({ success: true, users: [result] });
