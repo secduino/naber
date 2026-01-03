@@ -225,8 +225,8 @@ io.on('connection', (socket) => {
       user = {
         id: data.userId,
         name: 'Kullanıcı',
-        phoneNumber: '',
-        email: '',
+        phoneNumber: data.phoneNumber || '',
+        email: data.email || '',
         isOnline: true,
         socketId: socket.id,
         createdAt: new Date()
@@ -235,10 +235,14 @@ io.on('connection', (socket) => {
     } else {
       user.isOnline = true;
       user.socketId = socket.id;
+      // Bilgileri güncelle (eğer eksikse)
+      if (data.phoneNumber) user.phoneNumber = data.phoneNumber;
+      if (data.email) user.email = data.email;
+
       users.set(data.userId, user);
     }
 
-    console.log(`User ${data.userId} is now online with socket ${socket.id}`);
+    console.log(`User ${data.userId} online. Queryable by: ${user.phoneNumber} or ${user.email}`);
 
     io.emit('user:status', {
       userId: data.userId,
